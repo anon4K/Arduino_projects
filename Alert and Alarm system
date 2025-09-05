@@ -1,1 +1,188 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <Keypad.h>
+#include <SoftwareSerial.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+SoftwareSerial sim800a(12, 13); 
+
+const byte ROWS = 4;
+const byte COLS = 4;
+char keys[ROWS][COLS] = {
+  {'1', '2', '3', 'A'},
+  {'4', '5', '6', 'B'},
+  {'7', '8', '9', 'C'},
+  {'*', '0', '#', 'D'}
+};
+byte rowPins[ROWS] = {9, 8, 7, 6}; 
+byte colPins[COLS] = {5, 4, 3, 2}; 
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+
+const int pirPin = 10;
+const int buzzerPin = 11;
+
+const char armPassword[] = "2356"; 
+const char disarmPassword[] = "5689"; 
+char enteredPassword[5];
+int passwordIndex = 0;
+
+bool isArmed = false;
+bool alarmTriggered = false;
+bool smsSent = false;
+unsigned long armingStartTime = 0;
+const long armingDelay = 30000;
+
+const char phoneNumber[] = "+2349037207068";
+
+unsigned long previousBuzzerMillis = 0;
+int buzzerFrequency = 800;
+int buzzerStep = 10;
+bool buzzerIncreasing = true;
+const int buzzerMin = 800;
+const int buzzerMax = 1200;
+const int buzzerDelay = 10;
+
+void setup() {
+  lcd.begin(16, 2);
+  lcd.backlight();
+  pinMode(pirPin, INPUT);
+  pinMode(buzzerPin, OUTPUT);
+  sim800a.begin(9600);
+  delay(1000);
+  setupSIM800A();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Alarm Security");
+  lcd.setCursor(0, 1);
+  lcd.print("System");
+  delay(2000);
+  lcd.clear();
+  lcd.print("Enter Password:");
+}
+
+void setupSIM800A() {
+  sim800a.println("AT");
+  delay(100);
+  sim800a.println("AT+CMGF=1");
+  delay(100);
+  sim800a.println("AT+CNMI=2,2,0,0,0");
+  delay(100);
+}
+
+void sendSMS() {
+  sim800a.println("AT+CMGF=1");
+  delay(100);
+  sim800a.print("AT+CMGS=\"");
+  sim800a.print(phoneNumber);
+  sim800a.println("\"");
+  delay(100);
+  sim800a.println("Intruder Detected");
+  delay(100);
+  sim800a.write(0x1A);
+  delay(100);
+}
+
+void loop() {
+  char key = keypad.getKey();
+  if (key) {
+    if (key == '#') {
+      enteredPassword[passwordIndex] = '\0';
+      if (alarmTriggered || isArmed) {
+        if (strcmp(enteredPassword, disarmPassword) == 0) {
+          isArmed = false;
+          alarmTriggered = false;
+          smsSent = false;
+          noTone(buzzerPin);
+          lcd.clear();
+          lcd.print("System Disarmed");
+          delay(2000);
+          lcd.clear();
+          lcd.print("Enter Password:");
+        } else {
+          lcd.clear();
+          lcd.print("Wrong Password");
+          delay(1000);
+          lcd.clear();
+          lcd.print("Enter Password:");
+        }
+      } else {
+        if (strcmp(enteredPassword, armPassword) == 0) {
+          isArmed = true;
+          armingStartTime = millis();
+          lcd.clear();
+          lcd.print("System Armed");
+          delay(2000);
+          lcd.clear();
+          lcd.print("Arming in 30s...");
+        } else {
+          lcd.clear();
+          lcd.print("Wrong Password");
+          delay(1000);
+          lcd.clear();
+          lcd.print("Enter Password:");
+        }
+      }
+      passwordIndex = 0;
+    } else if (key == 'D') {
+      passwordIndex = 0;
+      lcd.clear();
+      lcd.print("Enter Password:");
+    } else if (passwordIndex < 4) {
+      enteredPassword[passwordIndex] = key;
+      lcd.setCursor(passwordIndex, 1);
+      lcd.print('*');
+      passwordIndex++;
+    }
+  }
+
+  if (isArmed && !alarmTriggered) {
+    if (millis() - armingStartTime >= armingDelay) {
+      lcd.setCursor(0, 0);
+      lcd.print("System Armed    ");
+      if (digitalRead(pirPin) == HIGH) {
+        alarmTriggered = true;
+        tone(buzzerPin, buzzerFrequency);
+        lcd.clear();
+        lcd.print("Motion Detected!");
+        lcd.setCursor(0, 1);
+        lcd.print("Disarm System!");
+        delay(5000);
+        lcd.clear();
+        lcd.print("SMS sent");
+        delay(2000);
+        lcd.clear();
+        lcd.print("Enter Password:");
+        lcd.setCursor(0, 1);
+        if (!smsSent) {
+          sendSMS();
+          smsSent = true;
+        }
+      }
+    } else {
+      int secondsLeft = (armingDelay - (millis() - armingStartTime)) / 1000;
+      lcd.setCursor(0, 1);
+      lcd.print("Time left: ");
+      lcd.print(secondsLeft);
+      lcd.print("s ");
+    }
+  }
+
+  if (alarmTriggered) {
+    unsigned long currentMillis = millis();
+    if (currentMillis - previousBuzzerMillis >= buzzerDelay) {
+      previousBuzzerMillis = currentMillis;
+      tone(buzzerPin, buzzerFrequency);
+      if (buzzerIncreasing) {
+        buzzerFrequency += buzzerStep;
+        if (buzzerFrequency >= buzzerMax) buzzerIncreasing = false;
+      } else {
+        buzzerFrequency -= buzzerStep;
+        if (buzzerFrequency <= buzzerMin) buzzerIncreasing = true;
+      }
+    }
+  }
+}
+
+
 
